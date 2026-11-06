@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:flutter_modular/flutter_modular.dart';
@@ -47,7 +50,20 @@ class _DownloadPageState extends State<DownloadPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: const SysAppBar(title: Text('下载管理')),
+      appBar: SysAppBar(
+        title: const Text('下载管理'),
+        actions: [
+          PopupMenuButton<bool>(
+            tooltip: '导入本地视频',
+            icon: const Icon(Icons.video_file_rounded),
+            onSelected: (folder) => _importLocalVideo(folder: folder),
+            itemBuilder: (context) => const [
+              PopupMenuItem(value: false, child: Text('导入文件')),
+              PopupMenuItem(value: true, child: Text('导入文件夹')),
+            ],
+          ),
+        ],
+      ),
       body: Observer(builder: (context) {
         final recordKeys = downloadController.recordKeys.toList();
         _expanded.removeWhere((key, _) => !recordKeys.contains(key));
@@ -71,6 +87,98 @@ class _DownloadPageState extends State<DownloadPage> {
         );
       }),
     );
+  }
+
+  static const _videoExtensions = {
+    'mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'ts', 'm4v', 'wmv', //
+  };
+
+  /// Zero-pads digit runs so "ep2" sorts before "ep10".
+  static String _naturalKey(String path) => path.replaceAllMapped(
+        RegExp(r'\d+'),
+        (m) => m[0]!.padLeft(8, '0'),
+      );
+
+  Future<void> _importLocalVideo({required bool folder}) async {
+    final String defaultTitle;
+    final List<String> sources;
+    if (folder) {
+      final dir = await FilePicker.platform.getDirectoryPath();
+      if (dir == null || !mounted) return;
+      defaultTitle = dir.split(RegExp(r'[\\/]')).last;
+      sources = Directory(dir)
+          .listSync()
+          .whereType<File>()
+          .map((f) => f.path)
+          .where(
+              (p) => _videoExtensions.contains(p.split('.').last.toLowerCase()))
+          .toList();
+    } else {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.video,
+        allowMultiple: true,
+      );
+      sources = [...?picked?.files.map((f) => f.path).whereType<String>()];
+      if (sources.isEmpty || !mounted) return;
+      defaultTitle =
+          sources.first.split(RegExp(r'[\\/]')).last.split('.').first;
+    }
+    if (sources.isEmpty) {
+      KazumiDialog.showToast(message: '没有找到视频文件');
+      return;
+    }
+    sources.sort((a, b) => _naturalKey(a).compareTo(_naturalKey(b)));
+    final titleController = TextEditingController(text: defaultTitle);
+    final episodeController = TextEditingController(text: '1');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('导入本地视频 (${sources.length} 个文件)'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: titleController,
+              decoration: const InputDecoration(labelText: '番剧名称'),
+            ),
+            TextField(
+              controller: episodeController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: '起始集数 (按文件名排序依次递增)',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('导入'),
+          ),
+        ],
+      ),
+    );
+    final title = titleController.text.trim();
+    final episode = int.tryParse(episodeController.text.trim());
+    if (ok != true || title.isEmpty || episode == null) return;
+    var done = 0;
+    try {
+      for (final source in sources) {
+        await downloadController.importLocalVideo(
+          sourcePath: source,
+          title: title,
+          episodeNumber: episode + done,
+        );
+        done++;
+      }
+      KazumiDialog.showToast(message: '导入完成 ($done)');
+    } catch (e) {
+      KazumiDialog.showToast(message: '已导入 $done 个, 失败: $e');
+    }
   }
 
   Widget _buildRecordCard(String recordKey) {

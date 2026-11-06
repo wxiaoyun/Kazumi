@@ -7,7 +7,10 @@ import 'package:kazumi/plugins/plugins.dart';
 import 'package:kazumi/plugins/plugins_controller.dart';
 import 'package:kazumi/repositories/download_repository.dart';
 import 'package:kazumi/services/download/background_download_service.dart';
+import 'package:kazumi/services/download/download_directory_service.dart';
 import 'package:kazumi/services/download/download_manager.dart';
+import 'package:kazumi/utils/file_system.dart';
+import 'package:path/path.dart' as path;
 import 'package:kazumi/utils/format.dart';
 import 'package:kazumi/services/logging/logger.dart';
 import 'package:kazumi/services/storage/storage.dart';
@@ -252,6 +255,73 @@ abstract class _DownloadController with Store {
   }
 
   @action
+  /// Plugin name used for records created by [importLocalVideo].
+  static const localPluginName = '本地';
+
+  /// Copies a video file into the download directory and registers it as a
+  /// completed episode, so the offline player can open it.
+  /// The file is copied (not referenced) because deleting an episode removes
+  /// its whole directory.
+  Future<void> importLocalVideo({
+    required String sourcePath,
+    required String title,
+    required int episodeNumber,
+  }) async {
+    // Stable negative id, cannot collide with real Bangumi ids.
+    final bangumiId = -(title.codeUnits
+            .fold<int>(7, (h, c) => (h * 31 + c) & 0x3fffffff) +
+        1);
+    final recordKey = '${localPluginName}_$bangumiId';
+    if (_repository.getEpisode(bangumiId, localPluginName, episodeNumber) !=
+        null) {
+      await deleteEpisode(bangumiId, localPluginName, episodeNumber);
+    }
+
+    final episodeDir = path.join(
+      await DownloadDirectoryService().getDownloadDirectory(),
+      '${bangumiId}_$localPluginName',
+      '$episodeNumber',
+    );
+    final destPath = path.join(episodeDir, path.basename(sourcePath));
+    KazumiLogger().i(
+        'DownloadController: stage=import_local source=$sourcePath target=$destPath');
+    try {
+      await ensureDirectoryWritable(episodeDir);
+      await File(sourcePath).copy(destPath);
+      final record = _repository.getRecord(recordKey) ??
+          DownloadRecord(
+              bangumiId, title, '', localPluginName, {}, DateTime.now());
+      record.episodes[episodeNumber] = DownloadEpisode(
+        episodeNumber,
+        '',
+        0,
+        DownloadStatus.completed,
+        1.0,
+        1,
+        1,
+        destPath,
+        episodeDir,
+        '',
+        DateTime.now(),
+        '',
+        await File(destPath).length(),
+        '',
+      );
+      await _repository.putRecord(record);
+    } catch (e) {
+      KazumiLogger()
+          .e('DownloadController: stage=import_local failed', error: e);
+      try {
+        await Directory(episodeDir).delete(recursive: true);
+      } on FileSystemException {
+        // Nothing to clean up.
+      }
+      rethrow;
+    } finally {
+      _refreshRecord(recordKey);
+    }
+  }
+
   void refreshRecords() {
     _replaceRecords(_repository.getAllRecords());
   }
