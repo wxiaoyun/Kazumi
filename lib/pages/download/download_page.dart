@@ -10,6 +10,7 @@ import 'package:kazumi/bean/widget/empty_state_widget.dart';
 import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/pages/download/download_controller.dart';
+import 'package:kazumi/request/apis/bangumi_api.dart';
 import 'package:kazumi/pages/download/download_widgets.dart';
 import 'package:kazumi/pages/video/video_playback_args.dart';
 import 'package:kazumi/services/logging/logger.dart';
@@ -128,49 +129,94 @@ class _DownloadPageState extends State<DownloadPage> {
       return;
     }
     sources.sort((a, b) => _naturalKey(a).compareTo(_naturalKey(b)));
-    final titleController = TextEditingController(text: defaultTitle);
+    final searchController = TextEditingController(text: defaultTitle);
     final episodeController = TextEditingController(text: '1');
+    var results = <BangumiItem>[];
+    BangumiItem? show;
+    var searching = false;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('导入本地视频 (${sources.length} 个文件)'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleController,
-              decoration: const InputDecoration(labelText: '番剧名称'),
-            ),
-            TextField(
-              controller: episodeController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: '起始集数 (按文件名排序依次递增)',
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          Future<void> search() async {
+            setDialogState(() => searching = true);
+            final page = await BangumiApi.bangumiSearch(
+              searchController.text.trim(),
+              limit: 6,
+            );
+            setDialogState(() {
+              results = page?.items ?? [];
+              show = null;
+              searching = false;
+            });
+          }
+
+          return AlertDialog(
+            title: Text('导入本地视频 (${sources.length} 个文件)'),
+            content: SizedBox(
+              width: 400,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: searchController,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => search(),
+                      decoration: InputDecoration(
+                        labelText: '搜索番剧 (Bangumi)',
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.search),
+                          onPressed: search,
+                        ),
+                      ),
+                    ),
+                    if (searching) const LinearProgressIndicator(),
+                    for (final item in results)
+                      ListTile(
+                        dense: true,
+                        selected: show?.id == item.id,
+                        title: Text(item.nameCn),
+                        subtitle: Text(item.airDate),
+                        trailing: show?.id == item.id
+                            ? const Icon(Icons.check)
+                            : null,
+                        onTap: () => setDialogState(() => show = item),
+                      ),
+                    TextField(
+                      controller: episodeController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '起始集数 (按文件名排序依次递增)',
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('导入'),
-          ),
-        ],
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed:
+                    show == null ? null : () => Navigator.pop(context, true),
+                child: const Text('导入'),
+              ),
+            ],
+          );
+        },
       ),
     );
-    final title = titleController.text.trim();
     final episode = int.tryParse(episodeController.text.trim());
-    if (ok != true || title.isEmpty || episode == null) return;
+    if (ok != true || show == null || episode == null) return;
     var done = 0;
     try {
       for (final source in sources) {
         await downloadController.importLocalVideo(
           sourcePath: source,
-          title: title,
+          show: show!,
           episodeNumber: episode + done,
         );
         done++;

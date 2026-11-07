@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:kazumi/modules/bangumi/bangumi_item.dart';
 import 'package:kazumi/modules/download/download_module.dart';
 import 'package:kazumi/modules/danmaku/danmaku_module.dart';
 import 'package:kazumi/plugins/plugins.dart';
@@ -264,13 +265,11 @@ abstract class _DownloadController with Store {
   /// its whole directory.
   Future<void> importLocalVideo({
     required String sourcePath,
-    required String title,
+    required BangumiItem show,
     required int episodeNumber,
   }) async {
-    // Stable negative id, cannot collide with real Bangumi ids.
-    final bangumiId = -(title.codeUnits
-            .fold<int>(7, (h, c) => (h * 31 + c) & 0x3fffffff) +
-        1);
+    // The real Bangumi id keeps danmaku and metadata lookups working.
+    final bangumiId = show.id;
     final recordKey = '${localPluginName}_$bangumiId';
     if (_repository.getEpisode(bangumiId, localPluginName, episodeNumber) !=
         null) {
@@ -290,7 +289,12 @@ abstract class _DownloadController with Store {
       await File(sourcePath).copy(destPath);
       final record = _repository.getRecord(recordKey) ??
           DownloadRecord(
-              bangumiId, title, '', localPluginName, {}, DateTime.now());
+              bangumiId,
+              show.nameCn,
+              show.images['large'] ?? '',
+              localPluginName,
+              {},
+              DateTime.now());
       record.episodes[episodeNumber] = DownloadEpisode(
         episodeNumber,
         '',
